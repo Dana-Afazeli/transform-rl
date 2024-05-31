@@ -3,6 +3,7 @@ import os
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 import DDPG
 import utils
@@ -108,14 +109,14 @@ if __name__ == "__main__":
     for eps in range(int(args.num_eps)):
         state, done = env.reset(), False
         episode_reward = 0
-        episode_num = 0
         episode_time_steps = 0
 
         state = whiten(state)
 
         eps_rewards = []
 
-        for t in range(int(args.num_time_steps_per_eps)):
+        progress_bar = tqdm(range(int(args.num_time_steps_per_eps)))
+        for t in progress_bar:
             # Choose action from the policy
             action = agent.select_action(np.array(state))
 
@@ -138,26 +139,21 @@ if __name__ == "__main__":
             # Train the agent
             agent.update_parameters(replay_buffer, args.batch_size)
 
-            print(f"Time step: {t + 1} Episode Num: {episode_num + 1} Reward: {reward:.3f}")
-
             eps_rewards.append(reward)
-
             episode_time_steps += 1
 
+            progress_bar.set_description(
+                f"Time step: {t + 1} "
+                f"Episode Num: {eps + 1} "
+                f"Avg. Reward: {np.average(eps_rewards[-min(10, len(eps_rewards))]):.3f} "
+                f"Max Reward: {max_reward:.3f}"
+            )
+
             if done:
-                print(f"\nTotal T: {t + 1} Episode Num: {episode_num + 1} Episode T: {episode_time_steps} Max. Reward: {max_reward:.3f}\n")
-
-                # Reset the environment
-                state, done = env.reset(), False
-                episode_reward = 0
-                episode_time_steps = 0
-                episode_num += 1
-
-                state = whiten(state)
-
                 instant_rewards.append(eps_rewards)
 
-                np.save(f"./Learning Curves/{args.experiment_type}/{file_name}_episode_{episode_num + 1}", instant_rewards)
+                np.save(f"./Learning Curves/{args.experiment_type}/{file_name}_episode_{eps + 1}", instant_rewards)
+                break
 
     if args.save_model:
         agent.save(f"./Models/{file_name}")
