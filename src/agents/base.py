@@ -1,6 +1,8 @@
+import numpy as np
 import torch
 
 from abc import ABC, abstractmethod
+from collections import deque, namedtuple
 from torchsummary import summary
 
 class BaseAgent(ABC):
@@ -34,6 +36,10 @@ class BaseReplayBuffer(ABC):
 
     @abstractmethod
     def sample(self, size=1):
+        pass
+
+    @abstractmethod
+    def set_random_seed(self, random_seed):
         pass
 
     @abstractmethod
@@ -74,3 +80,45 @@ class BaseLinearNetwork(torch.nn.Module, ABC):
             result = l(result)
         
         return self._last_layer(result)
+
+class VanillaExperienceReplayBuffer(BaseReplayBuffer):
+    def __init__(self, buffer_size, batch_size, random_seed=42):
+        self.buffer_size = buffer_size
+        self.batch_size = batch_size
+        self.random_seed = random_seed
+        self.reset()
+        self.experience = namedtuple(
+            "Experience", 
+            field_names=["state", "action", "reward", "next_state", "done"]
+        )
+
+    def reset(self):
+        self.memory = []
+        self.current_index = 0
+        self.rng = np.random.default_rng(self.random_seed)
+        
+    def add(self, state, action, reward, next_state, done):
+        e = self.experience(state, action, reward, next_state, done)
+        if len(self) < self.buffer_size:
+            self.memory[self.current_index].append(e)
+        else:
+            self.memory[self.current_index] = e
+            self.current_index += (self.current_index + 1) % self.buffer_size
+
+    def sample(self):
+        indexes = self.rng.integers(low=0, high=len(self), size=self.batch_size)
+
+        states = np.vstack([self.memory[idx].state for idx in indexes])
+        actions = np.vstack([self.memory[idx].action for idx in indexes])
+        rewards = np.vstack([self.memory[idx].reward for idx in indexes])
+        next_states = np.vstack([self.memory[idx].next_state for idx in indexes])
+        dones = np.vstack([self.memory[idx].done for idx in indexes]).astype(np.float16)
+
+        return (states, actions, rewards, next_states, dones)
+
+    def set_random_seed(self, random_seed):
+        self.random_seed = random_seed
+        self.rng = np.random.default_rng(self.random_seed)
+
+    def __len__(self):
+        return len(self.memory)
