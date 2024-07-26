@@ -1,14 +1,18 @@
 import numpy as np
+import torch
 
+from base import *
 
-class RIS_MISO(object):
-    def __init__(self,
-                 num_antennas,
-                 num_RIS_elements,
-                 num_users,
-                 channel_est_error=False,
-                 AWGN_var=1e-2,
-                 channel_noise_var=1e-2):
+class RIS_MISO(BaseEnv):
+    def __init__(
+        self,
+        num_antennas,
+        num_RIS_elements,
+        num_users,
+        channel_est_error=False,
+        AWGN_var=1e-2,
+        channel_noise_var=1e-2
+    ):
 
         self.M = num_antennas
         self.L = num_RIS_elements
@@ -96,7 +100,44 @@ class RIS_MISO(object):
 
         return reward, opt_reward
 
+    def _compute_power(self, a):
+        # Normalize the power
+        G_real = a[:, :self.M ** 2].cpu().data.numpy()
+        G_imag = a[:, self.M ** 2:2 * self.M ** 2].cpu().data.numpy()
+
+        G = G_real.reshape(G_real.shape[0], self.M, self.K) + 1j * G_imag.reshape(G_imag.shape[0], self.M, self.K)
+
+        GG_H = np.matmul(G, np.transpose(G.conj(), (0, 2, 1)))
+
+        current_power_t = torch.sqrt(torch.from_numpy(np.real(np.trace(GG_H, axis1=1, axis2=2)))).reshape(-1, 1).to(self.device)
+
+        return current_power_t
+
+    def _compute_phase(self, a):
+        # Normalize the phase matrix
+        Phi_real = a[:, -2 * self.N:-self.N].detach()
+        Phi_imag = a[:, -self.N:].detach()
+
+        return torch.sum(torch.abs(Phi_real), dim=1).reshape(-1, 1) * np.sqrt(2), torch.sum(torch.abs(Phi_imag), dim=1).reshape(-1, 1) * np.sqrt(2)
+
+
     def step(self, action):
+        current_power_t = (
+            self._compute_power(torch.Tensor(action))
+            .expand(-1, 2 * self.M ** 2) / np.sqrt(self.power_t)
+        )
+
+        real_normal, imag_normal = self._compute_phase(torch.Tensor(action))
+
+        real_normal = real_normal.expand(-1, self.L)
+        imag_normal = imag_normal.expand(-1, self.L)
+
+        division_term = torch.cat(
+            [current_power_t, real_normal, imag_normal], 
+            dim=1
+        )
+        action = self.max_action * action / division_term
+
         self.episode_t += 1
 
         action = action.reshape(1, -1)
@@ -127,6 +168,11 @@ class RIS_MISO(object):
         done = opt_reward == reward
 
         return self.state, reward, done, None
-
-    def close(self):
-        pass
+    
+    def get_action_info(self):
+        #TODO: fix this
+        return 'continuous', ('idk'), 'idk'
+    
+    def get_state_type(self):
+        #TODO: fix this
+        return 'continuous', ('idk'), 'idk'
