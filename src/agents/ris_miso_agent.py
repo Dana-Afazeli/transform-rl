@@ -4,35 +4,7 @@ import torch.nn.functional as F
 
 from base import *
 from functools import reduce
-
-class StateEncoder(BaseLinearNetwork):
-    def _forward_last_layer(self, x):
-        return x
-
-class Actor(BaseLinearNetwork):
-    def __init__(self, state_encoder, layers_dim, activation='ReLU'):
-        super(Actor, self).__init__(layers_dim, activation)
-        self.state_encoder = state_encoder
-
-    def _forward_last_layer(self, x):
-        return x
-    
-    def forward(self, state):
-        enc_state = self.state_encoder(state)
-        return super().forward(enc_state)
-
-class Critic(BaseLinearNetwork):
-    def __init__(self, state_encoder, layers_dim, activation='ReLU'):
-        super(Critic, self).__init__(layers_dim, activation)
-        self.state_encoder = state_encoder
-
-    def _forward_last_layer(self, x):
-        return x
-    
-    def forward(self, state, action):
-        enc_state = self.state_encoder(state)
-        state_action = torch.cat((enc_state, action))
-        return super().forward(state_action)
+from utils import VanillaActor, VanillaCritic, VanillaExperienceReplayBuffer, VanillaStateEncoder
 
 class DDPG(BaseAgent):
     def __init__(
@@ -50,13 +22,13 @@ class DDPG(BaseAgent):
         self.tau = tau
         self.random_seed = random_seed
 
-        self.state_encoder = StateEncoder(
+        self.state_encoder = VanillaStateEncoder(
             [self.reduced_state_dim, 
              (self.reduced_state_dim+encoding_dim)/2, encoding_dim]
         ).to(self.device)
 
 
-        self.actor = Actor(
+        self.actor = VanillaActor(
             self.state_encoder, 
             [encoding_dim, 
              (encoding_dim+self.reduced_action_dim)/2, self.reduced_action_dim]
@@ -67,7 +39,7 @@ class DDPG(BaseAgent):
         )
 
 
-        self.critic = Critic(
+        self.critic = VanillaCritic(
             self.state_encoder,
             [encoding_dim + self.reduced_action_dim, 
              (encoding_dim + self.reduced_action_dim)/2, 1]
