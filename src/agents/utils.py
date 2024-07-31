@@ -1,37 +1,35 @@
 import numpy as np
 import torch
 
-from base import BaseReplayBuffer, BaseLinearNetwork
+from agents.base import BaseReplayBuffer, BaseLinearNetwork
 from collections import namedtuple
-
-class VanillaStateEncoder(BaseLinearNetwork):
-    def _forward_last_layer(self, x):
-        return x
+from torchsummary import summary
 
 class VanillaActor(BaseLinearNetwork):
     def __init__(self, state_encoder, layers_dim, activation='ReLU'):
         super(VanillaActor, self).__init__(layers_dim, activation)
         self.state_encoder = state_encoder
-
-    def _forward_last_layer(self, x):
-        return x
     
     def forward(self, state):
         enc_state = self.state_encoder(state)
         return super().forward(enc_state)
+    
+    def summary(self):
+        summary(self, (self.state_encoder.layers_dim[0],))
+
 
 class VanillaCritic(BaseLinearNetwork):
     def __init__(self, state_encoder, layers_dim, activation='ReLU'):
         super(VanillaCritic, self).__init__(layers_dim, activation)
         self.state_encoder = state_encoder
 
-    def _forward_last_layer(self, x):
-        return x
-    
     def forward(self, state, action):
         enc_state = self.state_encoder(state)
-        state_action = torch.cat((enc_state, action))
+        state_action = torch.cat((enc_state, action), dim=1)
         return super().forward(state_action)
+    
+    def summary(self):
+        summary(self, (self.state_encoder.layers_dim[0],))
 
 
 class VanillaExperienceReplayBuffer(BaseReplayBuffer):
@@ -53,14 +51,13 @@ class VanillaExperienceReplayBuffer(BaseReplayBuffer):
     def add(self, state, action, reward, next_state, done):
         e = self.experience(state, action, reward, next_state, done)
         if len(self) < self.buffer_size:
-            self.memory[self.current_index].append(e)
+            self.memory.append(e)
         else:
             self.memory[self.current_index] = e
-            self.current_index += (self.current_index + 1) % self.buffer_size
+            self.current_index = (self.current_index + 1) % self.buffer_size
 
     def sample(self):
-        indexes = self.rng.integers(low=0, high=len(self), size=self.batch_size)
-
+        indexes = self.rng.integers(low=0, high=len(self), size=min(self.batch_size, len(self)))
         states = np.vstack([self.memory[idx].state for idx in indexes])
         actions = np.vstack([self.memory[idx].action for idx in indexes])
         rewards = np.vstack([self.memory[idx].reward for idx in indexes])

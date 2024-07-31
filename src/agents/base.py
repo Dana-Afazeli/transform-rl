@@ -13,7 +13,7 @@ class BaseAgent(ABC):
     @abstractmethod
     def step(self, state, action, reward, next_state, done):
         pass
-
+    
     @abstractmethod
     def save(self, filepath):
         pass
@@ -46,13 +46,14 @@ class BaseReplayBuffer(ABC):
         pass
 
 
-class BaseLinearNetwork(torch.nn.Module, ABC):
+class BaseLinearNetwork(torch.nn.Module):
     
     def __init__(self, layers_dim, activation='ReLU'):
+        super(BaseLinearNetwork, self).__init__()
         self.layers_dim = layers_dim
         self.layers = []
         self.activation = activation
-        self._last_layer = None
+        self._last_layer = lambda x: x
         self._build_network()
 
     def _build_network(self):
@@ -62,16 +63,16 @@ class BaseLinearNetwork(torch.nn.Module, ABC):
             )
             if self.activation == 'ReLU':
                 self.layers.append(torch.nn.ReLU())
+            elif self.activation == 'tanh':
+                self.layers.append(torch.nn.Tanh())
             else:
                 #TODO: implement if needed
                 pass
 
-    @abstractmethod
-    def _forward_last_layer(self, x):
-        pass
+        self.nn_layers = torch.nn.ModuleList(self.layers)
 
     def summary(self):
-        summary(self, self.layers_dim[0])
+        summary(self, (self.layers_dim[0],))
 
     def forward(self, x):
         result = x

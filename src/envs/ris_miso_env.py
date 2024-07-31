@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from base import *
+from envs.base import *
 
 class RIS_MISO(BaseEnv):
     def __init__(
@@ -9,15 +9,16 @@ class RIS_MISO(BaseEnv):
         num_antennas,
         num_RIS_elements,
         num_users,
+        power_t,
         channel_est_error=False,
         AWGN_var=1e-2,
         channel_noise_var=1e-2
     ):
-
+        self.max_action = 1
         self.M = num_antennas
         self.L = num_RIS_elements
         self.K = num_users
-
+        self.power_t = power_t
         self.channel_est_error = channel_est_error
 
         assert self.M == self.K
@@ -44,6 +45,9 @@ class RIS_MISO(BaseEnv):
 
     def _compute_H_2_tilde(self):
         return self.H_2.T @ self.Phi @ self.H_1 @ self.G
+
+    def _whiten(self, state):
+        return (state - np.mean(state)) / np.std(state)
 
     def reset(self):
         self.episode_t = 0
@@ -74,7 +78,7 @@ class RIS_MISO(BaseEnv):
 
         self.state = np.hstack((init_action, power_t, power_r, H_1_real, H_1_imag, H_2_real, H_2_imag))
 
-        return self.state
+        return self._whiten(self.state.reshape(-1,))
 
     def _compute_reward(self, Phi):
         reward = 0
@@ -109,22 +113,23 @@ class RIS_MISO(BaseEnv):
 
         GG_H = np.matmul(G, np.transpose(G.conj(), (0, 2, 1)))
 
-        current_power_t = torch.sqrt(torch.from_numpy(np.real(np.trace(GG_H, axis1=1, axis2=2)))).reshape(-1, 1).to(self.device)
+        current_power_t = torch.sqrt(torch.from_numpy(np.real(np.trace(GG_H, axis1=1, axis2=2)))).reshape(-1, 1)
 
         return current_power_t
 
     def _compute_phase(self, a):
         # Normalize the phase matrix
-        Phi_real = a[:, -2 * self.N:-self.N].detach()
-        Phi_imag = a[:, -self.N:].detach()
+        Phi_real = a[:, -2 * self.L:-self.L].detach()
+        Phi_imag = a[:, -self.L:].detach()
 
         return torch.sum(torch.abs(Phi_real), dim=1).reshape(-1, 1) * np.sqrt(2), torch.sum(torch.abs(Phi_imag), dim=1).reshape(-1, 1) * np.sqrt(2)
 
 
     def step(self, action):
+        action = np.tanh(action).reshape(1,40)
         current_power_t = (
             self._compute_power(torch.Tensor(action))
-            .expand(-1, 2 * self.M ** 2) / np.sqrt(self.power_t)
+            .expand(-1, 2 * self.M ** 2) / np.sqrt(10 ** (self.power_t / 10))
         )
 
         real_normal, imag_normal = self._compute_phase(torch.Tensor(action))
@@ -135,7 +140,8 @@ class RIS_MISO(BaseEnv):
         division_term = torch.cat(
             [current_power_t, real_normal, imag_normal], 
             dim=1
-        )
+        ).detach().cpu().numpy()
+        
         action = self.max_action * action / division_term
 
         self.episode_t += 1
@@ -167,12 +173,12 @@ class RIS_MISO(BaseEnv):
 
         done = opt_reward == reward
 
-        return self.state, reward, done, None
+        return self._whiten(self.state.reshape(-1,)), reward, done
     
     def get_action_info(self):
         #TODO: fix this
-        return 'continuous', ('idk'), 'idk'
+        return 'continuous', (self.action_dim,)
     
-    def get_state_type(self):
+    def get_state_info(self):
         #TODO: fix this
-        return 'continuous', ('idk'), 'idk'
+        return 'continuous', (self.state_dim,)

@@ -2,14 +2,15 @@ import copy
 import torch
 import torch.nn.functional as F
 
-from base import *
+from agents.base import *
 from functools import reduce
-from utils import VanillaActor, VanillaCritic, VanillaExperienceReplayBuffer, VanillaStateEncoder
+from agents.utils import VanillaActor, VanillaCritic, VanillaExperienceReplayBuffer
 
 class DDPG(BaseAgent):
     def __init__(
             self, state_dim, action_dim, encoding_dim, lr, device, buffer_size, 
-            batch_size, weight_decay, discount=0.99, tau=0.001, random_seed = 42
+            batch_size, weight_decay, discount=0.99, tau=0.001,
+            random_seed = 42, activation='ReLU'
         ):
         self.state_dim = state_dim
         self.reduced_state_dim = self._reduce_dim(self.state_dim)
@@ -22,16 +23,17 @@ class DDPG(BaseAgent):
         self.tau = tau
         self.random_seed = random_seed
 
-        self.state_encoder = VanillaStateEncoder(
+        self.state_encoder = BaseLinearNetwork(
             [self.reduced_state_dim, 
-             (self.reduced_state_dim+encoding_dim)/2, encoding_dim]
-        ).to(self.device)
-
+             int((self.reduced_state_dim+encoding_dim)/2), encoding_dim],
+             activation
+        ).to(device)
 
         self.actor = VanillaActor(
             self.state_encoder, 
             [encoding_dim, 
-             (encoding_dim+self.reduced_action_dim)/2, self.reduced_action_dim]
+             int((encoding_dim+self.reduced_action_dim)/2), self.reduced_action_dim],
+             activation
         ).to(self.device)
         self.actor_target = copy.deepcopy(self.actor)
         self.actor_optimizer = torch.optim.Adam(
@@ -42,7 +44,7 @@ class DDPG(BaseAgent):
         self.critic = VanillaCritic(
             self.state_encoder,
             [encoding_dim + self.reduced_action_dim, 
-             (encoding_dim + self.reduced_action_dim)/2, 1]
+             int((encoding_dim + self.reduced_action_dim)/2), 1]
         ).to(self.device)
         self.critic_target = copy.deepcopy(self.critic)
         self.critic_optimizer = torch.optim.Adam(
@@ -57,29 +59,31 @@ class DDPG(BaseAgent):
         
     def summary(self):
         self.actor.summary()
-        self.critic.summary()
+        # self.critic.summary()
 
     def pi(self, state):
         self.actor.eval()
 
         actor_input = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
-        action = self.actor(actor_input).cpu().numpy().reshape(self.action_dim)
+        action = self.actor(actor_input).detach().cpu().numpy().reshape(self.action_dim)
 
         return action
 
-    def step(self, replay_buffer, batch_size=16):
+    def step(self, state, action, reward, next_state, done):
         self.actor.train()
-
-        state, action, next_state, reward, done = (
-            self.replay_buffer.sample(batch_size)
+        self.replay_buffer.add(state, action, reward, next_state, done)
+        states, actions, rewards, next_states, dones = map(
+            lambda x: torch.Tensor(x).to(self.device),
+            self.replay_buffer.sample()
         )
-
-        # Compute the target Q-value
-        target_Q = self.critic_target(next_state, self.actor_target(next_state))
-        target_Q = reward + ((1.-done) * self.discount * target_Q).detach()
+        target_Q = self.critic_target(
+            next_states, 
+            self.actor_target(next_states)
+        )
+        target_Q = rewards + ((1.-dones) * self.discount * target_Q).detach()
 
         # Get the current Q-value estimate
-        current_Q = self.critic(state, action)
+        current_Q = self.critic(states, actions)
 
         # Compute the critic loss
         critic_loss = F.mse_loss(current_Q, target_Q)
@@ -90,7 +94,7 @@ class DDPG(BaseAgent):
         self.critic_optimizer.step()
 
         # Compute the actor loss
-        actor_loss = -self.critic(state, self.actor(state)).mean()
+        actor_loss = -self.critic(states, self.actor(states)).mean()
 
         # Optimize the actor
         self.actor_optimizer.zero_grad()
