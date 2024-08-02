@@ -34,7 +34,7 @@ class DDPG(BaseAgent):
         )
 
 
-        self.critic = MLP(critic_layers).to(self.device)
+        self.critic = VanillaCritic(critic_layers).to(self.device)
         self.critic_target = copy.deepcopy(self.critic)
         self.critic_optimizer = torch.optim.Adam(
             self.critic.parameters(), lr=critic_lr, weight_decay=weight_decay
