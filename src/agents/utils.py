@@ -1,35 +1,85 @@
 import numpy as np
 import torch
 
-from agents.base import BaseReplayBuffer, BaseLinearNetwork
+from agents.base import BaseReplayBuffer
 from collections import namedtuple
 from torchsummary import summary
 
-class VanillaActor(BaseLinearNetwork):
-    def __init__(self, state_encoder, layers_dim, activation='ReLU'):
-        super(VanillaActor, self).__init__(layers_dim, activation)
+def get_layers(layers):
+    last_dim = layers[0]
+    nn_layers = []
+    for l in layers[1:]:
+        if isinstance(l, int):
+            nn_layers.append(
+                torch.nn.Linear(last_dim, l)
+            )
+            last_dim = l
+        elif isinstance(l, str):
+            if l == 'ReLU':
+                nn_layers.append(torch.nn.ReLU())
+            elif l == 'tanh':
+                nn_layers.append(torch.nn.Tanh())
+            elif l == 'BN':
+                nn_layers.append(torch.nn.BatchNorm1d(last_dim))
+            else:
+                # Implement if needed
+                pass
+
+    return nn_layers
+
+class MLP(torch.nn.Module):
+    def __init__(self, layers):
+        super(MLP, self).__init__()
+        self.layers = torch.nn.ModuleList(get_layers(layers))
+    
+    def forward(self, x):
+        result = x
+        for l in self.layers:
+            result = l(result)
+        
+        return result
+
+class VanillaActor(torch.nn.Module):
+    def __init__(self, state_encoder, layers):
+        super(VanillaActor, self).__init__()
         self.state_encoder = state_encoder
+        self.layers = torch.nn.ModuleList(get_layers(layers))
     
     def forward(self, state):
-        enc_state = self.state_encoder(state)
-        return super().forward(enc_state)
+        result = self.state_encoder(state)
+        for l in self.layers:
+            result = l(result)
+        
+        return result
     
     def summary(self):
-        summary(self, (self.state_encoder.layers_dim[0],))
+        print('Actor has {} Params'.format(
+                sum(p.numel() for p in self.parameters() if p.requires_grad)
+            )
+        )
+        # summary(self, (self.state_encoder.layers_dim[0],))
 
 
-class VanillaCritic(BaseLinearNetwork):
-    def __init__(self, state_encoder, layers_dim, activation='ReLU'):
-        super(VanillaCritic, self).__init__(layers_dim, activation)
+class VanillaCritic(torch.nn.Module):
+    def __init__(self, state_encoder, layers):
+        super(VanillaCritic, self).__init__()
         self.state_encoder = state_encoder
+        self.layers = torch.nn.ModuleList(get_layers(layers))
+
 
     def forward(self, state, action):
         enc_state = self.state_encoder(state)
-        state_action = torch.cat((enc_state, action), dim=1)
-        return super().forward(state_action)
+        result = torch.cat((enc_state, action), dim=1)
+        for l in self.layers:
+            result = l(result)
+
+        return result
     
     def summary(self):
-        summary(self, (self.state_encoder.layers_dim[0],))
+        print('Critic has {} Params'.format(
+                sum(p.numel() for p in self.parameters() if p.requires_grad)
+            )
+        )
 
 
 class VanillaExperienceReplayBuffer(BaseReplayBuffer):
@@ -56,8 +106,15 @@ class VanillaExperienceReplayBuffer(BaseReplayBuffer):
             self.memory[self.current_index] = e
             self.current_index = (self.current_index + 1) % self.buffer_size
 
-    def sample(self):
-        indexes = self.rng.integers(low=0, high=len(self), size=min(self.batch_size, len(self)))
+    def sample(self, size=None, resample_until_size=False):
+        if size is None:
+            size = self.batch_size
+
+        if not resample_until_size:
+            size = min(size, len(self))
+
+        indexes = self.rng.integers(low=0, high=len(self), size=size)
+        # print(indexes)
         states = np.vstack([self.memory[idx].state for idx in indexes])
         actions = np.vstack([self.memory[idx].action for idx in indexes])
         rewards = np.vstack([self.memory[idx].reward for idx in indexes])

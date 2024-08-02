@@ -10,8 +10,11 @@ default_config = {
     'awgn_var': 1e-2,
     'discount': 0.99,
     'tau': 1e-3,
-    'lr': 1e-4,
+    'lr': 1e-3,
     'weight_decay': 1e-5,
     'episodes': 5,
-    'max_timesteps': 10_000
+    'max_timesteps': 10_000,
+    'encoder_layers': [112, 200, 'BN'],
+    'actor_layers': [200, 200, 'tanh', 'BN', 200, 'tanh', 'BN', 40],
+    'critic_layers': [200 + 40, 100, 'tanh', 'BN', 50, 'tanh', 'BN', 1]
 }

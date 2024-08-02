@@ -4,16 +4,16 @@ import torch.nn.functional as F
 
 from agents.base import *
 from functools import reduce
-from agents.utils import VanillaActor, VanillaCritic, VanillaExperienceReplayBuffer
+from agents.utils import *
 
 class DDPG(BaseAgent):
     def __init__(
-            self, state_dim, action_dim, encoding_dim, lr, device, buffer_size, 
-            batch_size, weight_decay, discount=0.99, tau=0.001,
-            random_seed = 42, activation='ReLU'
+            self, action_dim, actor_lr, critic_lr, device, buffer_size,
+            batch_size, weight_decay, actor_layers, critic_layers, encoder_layers,
+            discount=0.99, tau=0.001, noise_var = 0.001, min_noise_var=0.001, 
+            noise_var_decay_rate = 0, random_seed = 42
         ):
-        self.state_dim = state_dim
-        self.reduced_state_dim = self._reduce_dim(self.state_dim)
+        super(BaseAgent, self).__init__()
         self.action_dim = action_dim
         self.reduced_action_dim = self._reduce_dim(self.action_dim)
         self.device = device
@@ -22,33 +22,30 @@ class DDPG(BaseAgent):
         self.discount = discount
         self.tau = tau
         self.random_seed = random_seed
+        self.noise_var = noise_var
+        self.max_noise_var = noise_var
+        self.min_noise_var = min_noise_var
+        self.noise_var_decay_rate = noise_var_decay_rate
 
-        self.state_encoder = BaseLinearNetwork(
-            [self.reduced_state_dim, 
-             int((self.reduced_state_dim+encoding_dim)/2), encoding_dim],
-             activation
-        ).to(device)
+        self.state_encoder = MLP(encoder_layers).to(device)
 
         self.actor = VanillaActor(
             self.state_encoder, 
-            [encoding_dim, 
-             int((encoding_dim+self.reduced_action_dim)/2), self.reduced_action_dim],
-             activation
+            actor_layers
         ).to(self.device)
         self.actor_target = copy.deepcopy(self.actor)
         self.actor_optimizer = torch.optim.Adam(
-            self.actor.parameters(), lr=lr, weight_decay=weight_decay
+            self.actor.parameters(), lr=actor_lr, weight_decay=weight_decay
         )
 
 
         self.critic = VanillaCritic(
-            self.state_encoder,
-            [encoding_dim + self.reduced_action_dim, 
-             int((encoding_dim + self.reduced_action_dim)/2), 1]
+            self.state_encoder, 
+            critic_layers
         ).to(self.device)
         self.critic_target = copy.deepcopy(self.critic)
         self.critic_optimizer = torch.optim.Adam(
-            self.critic.parameters(), lr=lr, weight_decay=weight_decay
+            self.critic.parameters(), lr=critic_lr, weight_decay=weight_decay
         )
 
         self.replay_buffer = VanillaExperienceReplayBuffer(
@@ -59,22 +56,28 @@ class DDPG(BaseAgent):
         
     def summary(self):
         self.actor.summary()
-        # self.critic.summary()
+        self.critic.summary()
 
-    def pi(self, state):
-        self.actor.eval()
+    def pi(self, state, eval=False):
+        if eval:
+            self.actor.eval()
 
         actor_input = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
-        action = self.actor(actor_input).detach().cpu().numpy().reshape(self.action_dim)
+        raw_action = self.actor(actor_input).detach().cpu().reshape(self.action_dim)
+        action = (
+            raw_action + 
+            (self.noise_var**0.5)*torch.randn(*raw_action.shape)
+        )
+        self._decay_noise_var()
 
-        return action
+        return action.numpy()
 
     def step(self, state, action, reward, next_state, done):
         self.actor.train()
         self.replay_buffer.add(state, action, reward, next_state, done)
         states, actions, rewards, next_states, dones = map(
             lambda x: torch.Tensor(x).to(self.device),
-            self.replay_buffer.sample()
+            self.replay_buffer.sample(resample_until_size=True)
         )
         target_Q = self.critic_target(
             next_states, 
@@ -138,3 +141,12 @@ class DDPG(BaseAgent):
             return dim
         else:
             raise Exception('wtf is your dim')
+        
+    def _decay_noise_var(self):
+        self.noise_var = max(
+            self.noise_var * (1-self.noise_var_decay_rate), 
+            self.min_noise_var
+        )
+
+    def reset_noise_var(self):
+        self.noise_var = self.max_noise_var

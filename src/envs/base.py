@@ -19,3 +19,7 @@ class BaseEnv(ABC):
     @abstractmethod
     def get_state_info(self):
         pass
+
+    @abstractmethod
+    def get_random_action(self):
+        pass

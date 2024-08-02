@@ -4,7 +4,7 @@ import torch
 
 from config import default_config
 from src.agents.ddpg import DDPG
-from src.envs.ris_miso_env import RIS_MISO
+from src.envs.mountain_car_continuous_env import MountainCarContinuous
 from src.utils.loops import simple_ddpg_loop
 
 def get_args():
@@ -17,14 +17,7 @@ def get_args():
 def main():
     args = get_args()
 
-    env = RIS_MISO(
-        args.num_antennas,
-        args.num_RIS_elements,
-        args.num_users,
-        args.power_t,
-        AWGN_var=args.awgn_var,
-    )
-    _, state_dim = env.get_state_info()
+    env = MountainCarContinuous(augment_reward=True)
     _, action_dim = env.get_action_info()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -40,6 +33,9 @@ def main():
         args.encoder_layers,
         args.discount,
         args.tau,
+        args.noise_var,
+        args.min_noise_var,
+        args.noise_var_decay_rate,
         args.random_seed,
     )
     agent.summary()
