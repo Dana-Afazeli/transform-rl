@@ -26,6 +26,10 @@ class BaseAgent(ABC):
     def summary(self):
         pass
 
+    @abstractmethod
+    def report_statistics(self):
+        pass
+
 
 class BaseReplayBuffer(ABC):
 

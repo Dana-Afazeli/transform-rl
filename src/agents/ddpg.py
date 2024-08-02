@@ -53,6 +53,12 @@ class DDPG(BaseAgent):
             self.batch_size,
             self.random_seed
         )
+
+        self.statistics = {
+            'actor_loss': None,
+            'critic_loss': None,
+            'noise_var': self.noise_var
+        }
         
     def summary(self):
         self.actor.summary()
@@ -83,7 +89,8 @@ class DDPG(BaseAgent):
             next_states, 
             self.actor_target(next_states)
         )
-        target_Q = rewards + ((1.-dones) * self.discount * target_Q).detach()
+        #TODO: WTF
+        target_Q = rewards + ((1.-dones) * self.discount * target_Q)
 
         # Get the current Q-value estimate
         current_Q = self.critic(states, actions)
@@ -111,6 +118,11 @@ class DDPG(BaseAgent):
         for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
             target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
+        self._update_statistics(
+            actor_loss=actor_loss.detach().cpu().numpy(), 
+            critic_loss=critic_loss.detach().cpu().numpy()
+        )
+        
         return actor_loss, critic_loss
 
     # Save the model parameters
@@ -147,6 +159,15 @@ class DDPG(BaseAgent):
             self.noise_var * (1-self.noise_var_decay_rate), 
             self.min_noise_var
         )
+        self._update_statistics(noise_var=self.noise_var)
 
     def reset_noise_var(self):
         self.noise_var = self.max_noise_var
+        self._update_statistics(noise_var=self.noise_var)
+
+    def _update_statistics(self, **kwargs):
+        for k, v in kwargs.items():
+            self.statistics[k] = v
+
+    def report_statistics(self):
+        return self.statistics

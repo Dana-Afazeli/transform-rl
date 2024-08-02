@@ -23,3 +23,7 @@ class BaseEnv(ABC):
     @abstractmethod
     def get_random_action(self):
         pass
+
+    @abstractmethod
+    def report_statistics(self):
+        pass

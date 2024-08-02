@@ -114,7 +114,6 @@ class VanillaExperienceReplayBuffer(BaseReplayBuffer):
             size = min(size, len(self))
 
         indexes = self.rng.integers(low=0, high=len(self), size=size)
-        # print(indexes)
         states = np.vstack([self.memory[idx].state for idx in indexes])
         actions = np.vstack([self.memory[idx].action for idx in indexes])
         rewards = np.vstack([self.memory[idx].reward for idx in indexes])
