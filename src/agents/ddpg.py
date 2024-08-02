@@ -9,7 +9,7 @@ from agents.utils import *
 class DDPG(BaseAgent):
     def __init__(
             self, action_dim, actor_lr, critic_lr, device, buffer_size,
-            batch_size, weight_decay, actor_layers, critic_layers, encoder_layers,
+            batch_size, weight_decay, actor_layers, critic_layers,
             discount=0.99, tau=0.001, noise_var = 0.001, min_noise_var=0.001, 
             noise_var_decay_rate = 0, random_seed = 42
         ):
@@ -27,22 +27,14 @@ class DDPG(BaseAgent):
         self.min_noise_var = min_noise_var
         self.noise_var_decay_rate = noise_var_decay_rate
 
-        self.state_encoder = MLP(encoder_layers).to(device)
-
-        self.actor = VanillaActor(
-            self.state_encoder, 
-            actor_layers
-        ).to(self.device)
+        self.actor = MLP(actor_layers).to(self.device)
         self.actor_target = copy.deepcopy(self.actor)
         self.actor_optimizer = torch.optim.Adam(
             self.actor.parameters(), lr=actor_lr, weight_decay=weight_decay
         )
 
 
-        self.critic = VanillaCritic(
-            self.state_encoder, 
-            critic_layers
-        ).to(self.device)
+        self.critic = MLP(critic_layers).to(self.device)
         self.critic_target = copy.deepcopy(self.critic)
         self.critic_optimizer = torch.optim.Adam(
             self.critic.parameters(), lr=critic_lr, weight_decay=weight_decay
@@ -88,8 +80,8 @@ class DDPG(BaseAgent):
         target_Q = self.critic_target(
             next_states, 
             self.actor_target(next_states)
-        )
-        #TODO: WTF
+        ).detach()
+        
         target_Q = rewards + ((1.-dones) * self.discount * target_Q)
 
         # Get the current Q-value estimate

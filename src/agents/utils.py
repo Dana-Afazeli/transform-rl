@@ -4,14 +4,17 @@ import torch
 from agents.base import BaseReplayBuffer
 from collections import namedtuple
 from torchsummary import summary
+from torch import nn
 
 def get_layers(layers):
     last_dim = layers[0]
     nn_layers = []
     for l in layers[1:]:
         if isinstance(l, int):
+            layer = torch.nn.Linear(last_dim, l)
+            torch.nn.init.xavier_uniform_(layer.weight)
             nn_layers.append(
-                torch.nn.Linear(last_dim, l)
+                layer
             )
             last_dim = l
         elif isinstance(l, str):
@@ -30,6 +33,7 @@ def get_layers(layers):
 class MLP(torch.nn.Module):
     def __init__(self, layers):
         super(MLP, self).__init__()
+        self.input_dim = layers[0]
         self.layers = torch.nn.ModuleList(get_layers(layers))
     
     def forward(self, x):
@@ -39,48 +43,63 @@ class MLP(torch.nn.Module):
         
         return result
 
-class VanillaActor(torch.nn.Module):
-    def __init__(self, state_encoder, layers):
-        super(VanillaActor, self).__init__()
-        self.state_encoder = state_encoder
-        self.layers = torch.nn.ModuleList(get_layers(layers))
-    
-    def forward(self, state):
-        result = self.state_encoder(state)
-        for l in self.layers:
-            result = l(result)
-        
-        return result
-    
     def summary(self):
-        print('Actor has {} Params'.format(
-                sum(p.numel() for p in self.parameters() if p.requires_grad)
-            )
-        )
-        # summary(self, (self.state_encoder.layers_dim[0],))
+        summary(self, (self.input_dim,))
 
-
-class VanillaCritic(torch.nn.Module):
-    def __init__(self, state_encoder, layers):
-        super(VanillaCritic, self).__init__()
-        self.state_encoder = state_encoder
-        self.layers = torch.nn.ModuleList(get_layers(layers))
-
-
-    def forward(self, state, action):
-        enc_state = self.state_encoder(state)
-        result = torch.cat((enc_state, action), dim=1)
-        for l in self.layers:
-            result = l(result)
-
-        return result
+class TransfomerNetwork(nn.Module):
+    def __init__(self, config):
+        super(TransfomerNetwork, self).__init__()
+        self.input_dim = config['input_layers'][0]
+        self.networks = self._init_networks(config)
+        self.params = torch.nn.ModuleList(self.networks.values())
     
-    def summary(self):
-        print('Critic has {} Params'.format(
-                sum(p.numel() for p in self.parameters() if p.requires_grad)
+    def _init_networks(self, config):
+        netowrks = {
+            'input_layer': MLP(*config['input_layers']),
+            'output_layer': MLP(*config['output_layers']),
+            'positional_embedding': nn.Parameter(
+                torch.randn(config['context_len'], config['input_layer'][1])/1e3
+            ),
+            'decoder': nn.TransformerDecoderLayer(
+                d_model=config['output_layers'][0],
+                nhead=4,
+                dim_feedforward=config['output_layers'][0],
+                dropout=0.1, 
+                batch_first=True
             )
+        }
+
+    def _generate_mask(self, context_size):
+        mask = (
+            torch.triu(torch.ones(context_size, context_size)) == 1
+        ).transpose(0, 1)
+        mask = (
+            mask.float()
+            .masked_fill(mask == 0, float('-inf'))
+            .masked_fill(mask == 1, float(0.0))
+        )
+        return mask
+    
+    def forward(self, x):
+        if len(x.shape) == 2:
+            x = x.unsqueeze(0)
+        # x: (batch_size, context_size, state_size)
+        enc_x = self.networks['input_layer'](x)
+        enc_x += (
+            self.networks['positional_embedding']
+            .unsqueeze(0).repeat(enc_x.shape[0], 1, 1)
+            [:, :enc_x.shape[1], :]
         )
 
+        mask = self._generate_mask(enc_x.shape[1])
+        decoder_output = (
+            self.networks['decoder']
+            (enc_x, enc_x, tgt_mask=mask)[:, -1, :]
+        )
+
+        action = self.networks['output_layer'](decoder_output)
+        return action
+    
 
 class VanillaExperienceReplayBuffer(BaseReplayBuffer):
     def __init__(self, buffer_size, batch_size, random_seed=42):
