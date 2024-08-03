@@ -1,9 +1,10 @@
+import copy
 import numpy as np
 import torch
 
-from agents.base import BaseReplayBuffer
+from src.agents.base import BaseReplayBuffer
 from collections import namedtuple
-from torchsummary import summary
+from torchinfo import summary
 from torch import nn
 
 def get_layers(layers):
@@ -43,12 +44,12 @@ class MLP(nn.Module):
         
         return result
 
-    def summary(self):
-        summary(self, (self.input_dim,))
+    def summary(self, device):
+        summary(self, (2, self.input_dim,), device=device)
 
 class VanillaCritic(nn.Module):
     def __init__(self, layers):
-        super(MLP, self).__init__()
+        super(VanillaCritic, self).__init__()
         self.input_dim = layers[0]
         self.layers = torch.nn.ModuleList(get_layers(layers))
     
@@ -57,36 +58,45 @@ class VanillaCritic(nn.Module):
             result = x
         else:
             dim = len(x.shape) - 1
-            result = torch.stack([x, y], dim=dim)
+            result = torch.cat([x, y], dim=dim).to(x.device)
 
         for l in self.layers:
-            result = l(result)
+            if (len(result.shape) == 3) and isinstance(l, nn.BatchNorm1d):
+                result = result.transpose(1, 2)
+                result = l(result)
+                result = result.transpose(1, 2)
+            else:
+                result = l(result)
         
         return result
 
-    def summary(self):
-        summary(self, (self.input_dim,))
+    def summary(self, device):
+        summary(self, (2, self.input_dim,), device=device)
 
 class TransfomerNetwork(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, device):
         super(TransfomerNetwork, self).__init__()
         self.input_dim = config['input_layers'][0]
         self.context_len = config['context_len']
-        self.networks = self._init_networks(config)
-        self.params = torch.nn.ModuleList(self.networks.values())
-    
+        self._init_networks(config)
+        self.trans_modules = torch.nn.ModuleList(
+            v for k, v in self.networks.items() if k != 'positional_embedding'
+        )
+        self.positional_embedding = self.networks['positional_embedding']
+        self.device = device
+
     def _init_networks(self, config):
-        netowrks = {
-            'input_layer': MLP(*config['input_layers']),
-            'output_layer': MLP(*config['output_layers']),
+        self.networks = {
+            'input_layer': MLP(config['input_layers']),
+            'output_layer': MLP(config['output_layers']),
             'positional_embedding': nn.Parameter(
-                torch.randn(config['context_len'], config['input_layer'][1])/1e3
+                torch.randn(config['context_len'], config['input_layers'][1])/1e3
             ),
             'decoder': nn.TransformerDecoderLayer(
                 d_model=config['output_layers'][0],
-                nhead=4,
+                nhead=config['nhead'],
                 dim_feedforward=config['output_layers'][0],
-                dropout=0.1, 
+                dropout=config['dropout'], 
                 batch_first=True
             )
         }
@@ -113,7 +123,7 @@ class TransfomerNetwork(nn.Module):
             [:, :enc_x.shape[1], :]
         )
 
-        mask = self._generate_mask(enc_x.shape[1])
+        mask = self._generate_mask(enc_x.shape[1]).to(self.device)
         decoder_output = (
             self.networks['decoder']
             (enc_x, enc_x, tgt_mask=mask)
@@ -125,16 +135,16 @@ class TransfomerNetwork(nn.Module):
         else:
             return actions[:, -1, :]
     
-    def summary(self):
-        summary(self, (1, self.context_len, self.input_dim,))
+    def summary(self, device):
+        summary(self, (self.context_len, self.input_dim,), device=device)
     
 class ContextualExperienceReplayBuffer(BaseReplayBuffer):
-    def __init__(self, buffer_size, batch_size, context_size, random_seed=42):
+    def __init__(self, buffer_size, batch_size, context_len, random_seed=42):
         self.buffer_size = buffer_size
         self.batch_size = batch_size
-        self.context_size = context_size
+        self.context_len = context_len
         self.random_seed = random_seed
-        self.reset()
+        self.full_reset()
         self.experience = namedtuple(
             'Experience',
             field_names=['state', 'action', 'next_state', 'reward', 'done']
@@ -142,26 +152,27 @@ class ContextualExperienceReplayBuffer(BaseReplayBuffer):
         self.experience_sequence = namedtuple(
             'ExperienceSequence',
             field_names=[
-                'state_sequence',
-                'action_sequence',
-                'reward_sequence',
-                'done_sequence'
+                'state_seq',
+                'action_seq',
+                'reward_seq',
+                'next_state_seq',
+                'done_seq'
             ]
         )
 
     def add(self, state, action, reward, next_state, done):
-        self.stm['states'].append(state)
-        self.stm['states'] = self.stm['states'][-self.context_size:]
-        self.stm['actions'].append(action)
-        self.stm['actions'] = self.stm['action'][-self.context_size:]
-        self.stm['rewards'].append(reward)
-        self.stm['rewards'] = self.stm['reward'][-self.context_size:]
-        self.stm['next_states'].append(next_state)
-        self.stm['next_states'] = self.stm['next_state'][-self.context_size:]
-        self.stm['dones'].append(done)
-        self.stm['dones'] = self.stm['done'][-self.context_size:]
+        self.stm['states'] = self.stm['states'] + [state]
+        self.stm['states'] = self.stm['states'][-self.context_len:]
+        self.stm['actions'] = self.stm['actions'] + [action]
+        self.stm['actions'] = self.stm['actions'][-self.context_len:]
+        self.stm['rewards'] = self.stm['rewards'] + [reward]
+        self.stm['rewards'] = self.stm['rewards'][-self.context_len:]
+        self.stm['next_states'] = self.stm['next_states'] + [next_state]
+        self.stm['next_states'] = self.stm['next_states'][-self.context_len:]
+        self.stm['dones'] = self.stm['dones'] + [done]
+        self.stm['dones'] = self.stm['dones'][-self.context_len:]
 
-        if len(self.stm['states']) == self.context_size:
+        if len(self.stm['states']) == self.context_len:
             self._add_sequence()
 
     def _add_sequence(self):
@@ -169,6 +180,7 @@ class ContextualExperienceReplayBuffer(BaseReplayBuffer):
             self.stm['states'],
             self.stm['actions'],
             self.stm['rewards'],
+            self.stm['next_states'],
             self.stm['dones']
         )
         if len(self) < self.buffer_size:
@@ -178,7 +190,7 @@ class ContextualExperienceReplayBuffer(BaseReplayBuffer):
             self.current_index = (self.current_index + 1) % self.buffer_size
 
 
-    def sample(self, size=1, resample_until_batch_size=False):
+    def sample(self, size=None, resample_until_batch_size=False):
         if size is None:
             size = self.batch_size
 
@@ -187,19 +199,19 @@ class ContextualExperienceReplayBuffer(BaseReplayBuffer):
 
         indexes = self.rng.integers(low=0, high=len(self), size=size)
         states = np.vstack(
-            [np.vstack(self.memory[idx].states) for idx in indexes]
+            [np.expand_dims(np.vstack(self.memory[idx].state_seq), 0) for idx in indexes]
         )
         actions = np.vstack(
-            [np.vstack(self.memory[idx].actions) for idx in indexes]
+            [np.expand_dims(np.vstack(self.memory[idx].action_seq), 0) for idx in indexes]
         )
         rewards = np.vstack(
-            [np.vstack(self.memory[idx].rewards) for idx in indexes]
+            [np.expand_dims(np.vstack(self.memory[idx].reward_seq), 0) for idx in indexes]
         )
         next_states = np.vstack(
-            [np.vstack(self.memory[idx].next_states) for idx in indexes]
+            [np.expand_dims(np.vstack(self.memory[idx].next_state_seq), 0) for idx in indexes]
         )
         dones = np.vstack(
-            [np.vstack(self.memory[idx].dones) for idx in indexes]
+            [np.expand_dims(np.vstack(self.memory[idx].done_seq), 0) for idx in indexes]
         )
 
         return (states, actions, rewards, next_states, dones)
@@ -208,7 +220,7 @@ class ContextualExperienceReplayBuffer(BaseReplayBuffer):
         self.random_seed = random_seed
         self.rng = np.random.default_rng(self.random_seed)
 
-    def reset(self):
+    def full_reset(self):
         self.memory = []
         self.stm = {
             'states':[],
@@ -219,6 +231,15 @@ class ContextualExperienceReplayBuffer(BaseReplayBuffer):
         }
         self.current_index = 0
         self.rng = np.random.default_rng(self.random_seed)
+
+    def reset(self):
+        self.stm = {
+            'states':[],
+            'actions':[],
+            'next_states':[],
+            'rewards':[],
+            'dones':[]
+        }
 
     def __len__(self):
         return len(self.memory)

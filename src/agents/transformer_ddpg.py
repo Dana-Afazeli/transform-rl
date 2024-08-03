@@ -3,9 +3,7 @@ import torch.nn.functional as F
 
 from agents.base import *
 from agents.utils import *
-from torch import nn
-
-
+from functools import reduce
 
 class TransformerDDPG(BaseAgent):
     def __init__(self, action_dim, actor_lr, critic_lr, device, buffer_size,
@@ -27,7 +25,7 @@ class TransformerDDPG(BaseAgent):
         self.min_noise_var = min_noise_var
         self.noise_var_decay_rate = noise_var_decay_rate
 
-        self.actor = TransfomerNetwork(actor_config)
+        self.actor = TransfomerNetwork(actor_config, device).to(self.device)
         self.actor_target = copy.deepcopy(self.actor)
         self.actor_optimizer = torch.optim.Adam(
             self.actor.parameters(), lr=actor_lr, weight_decay=weight_decay
@@ -67,29 +65,28 @@ class TransformerDDPG(BaseAgent):
     def step(self, state, action, reward, next_state, done):
         self.replay_buffer.add(state, action, reward, next_state, done)
         if len(self.replay_buffer) == 0:
-            return
+            return 0, 0
         
         self.actor.train()
         state_seqs, action_seqs, reward_seqs, next_state_seqs, done_seqs = map(
             lambda x: torch.Tensor(x).to(self.device),
-            self.replay_buffer.sample(resample_until_size=True)
+            self.replay_buffer.sample(resample_until_batch_size=True)
         )
 
-        last_states = state_seqs[:, -1, :]
-        last_actions = action_seqs[:, -1, :]
-        last_rewards = reward_seqs[:, -1, :]
-        last_next_states = next_state_seqs[:, -1, :]
-        last_dones = done_seqs[:, -1, :]
+        # last_actions = action_seqs[:, -1, :]
+        # last_rewards = reward_seqs[:, -1, :]
+        # last_next_states = next_state_seqs[:, -1, :]
+        # last_dones = done_seqs[:, -1, :]
         # Note that actor should be able to use any context len
         target_Q = self.critic_target(
-            last_next_states, 
-            self.actor_target(last_next_states)
+            next_state_seqs, 
+            self.actor_target(next_state_seqs, all_actions=True).squeeze(0)
         ).detach()
         
-        target_Q = last_rewards + ((1.-last_dones) * self.discount * target_Q)
+        target_Q = reward_seqs + ((1.-done_seqs) * self.discount * target_Q)
 
         # Get the current Q-value estimate
-        current_Q = self.critic(last_states, last_actions)
+        current_Q = self.critic(state_seqs, action_seqs)
 
         # Compute the critic loss
         critic_loss = F.mse_loss(current_Q, target_Q)
@@ -102,7 +99,7 @@ class TransformerDDPG(BaseAgent):
         # Now for the hard fucking part
         actor_loss = -self.critic(
             state_seqs, 
-            self.actor(state_seqs, all_actions=True)
+            self.actor(state_seqs, all_actions=True).squeeze(0)
         ).mean()
 
         self.actor_optimizer.zero_grad()
@@ -123,15 +120,18 @@ class TransformerDDPG(BaseAgent):
         
         return actor_loss, critic_loss
     
+    def reset(self):
+        self.replay_buffer.reset()
+
     def save(self, filepath):
         pass
 
     def load(self, filepath):
         pass
 
-    def summary(self):
-        self.actor.summary()
-        self.critic.summary()
+    def summary(self, device):
+        self.actor.summary(device)
+        self.critic.summary(device)
 
     def _reduce_dim(self, dim):
         if isinstance(dim, tuple):

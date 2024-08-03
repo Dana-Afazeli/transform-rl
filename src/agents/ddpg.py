@@ -52,9 +52,9 @@ class DDPG(BaseAgent):
             'noise_var': self.noise_var
         }
         
-    def summary(self):
-        self.actor.summary()
-        self.critic.summary()
+    def summary(self, device):
+        self.actor.summary(device)
+        self.critic.summary(device)
 
     def pi(self, state, eval=False):
         if eval:
